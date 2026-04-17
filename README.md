@@ -59,9 +59,9 @@ ros2 run micro_ros_setup build_agent.sh
 
 ### 3. Clone this repository
 
-Recursively clone the appropriate branch for your ROS2 distribution, this repo include support for `jazzy`, `humble` and `galactic`.
+Recursively clone the repo (working for `humble`).
 ```bash
-git clone --recursive -b $ROS_DISTRO https://github.com/cscribano/RTES_freertos_PICO.git
+git clone --recursive https://github.com/alexveronese/DexTrace
 ```
 
 ## Running Examples
@@ -69,18 +69,18 @@ git clone --recursive -b $ROS_DISTRO https://github.com/cscribano/RTES_freertos_
 #### Build all the examples
 
 ```bash
-cd RTES_freertos_PICO
+cd DexTrace
 mkdir build
 cd build
 cmake ..
 make
 ```
 
-#### Flash an example
+#### Flash the rehab app
 
-To flash (example 01_executor_pub) hold the boot button, plug the USB and run:
+To flash hold the boot button, plug the USB and run:
 ```bash
-cp 01_executor_pub.uf2 $(findmnt -rn -o TARGET -S LABEL=RPI-RP2)/
+cp rehab.uf2 $(findmnt -rn -o TARGET -S LABEL=RPI-RP2)/
 ```
 
 #### Run micro ROS agent
@@ -93,37 +93,10 @@ source install/local_setup.bash
 ros2 run micro_ros_agent micro_ros_agent serial --dev /dev/ttyACM0
 ```
 
-### check published messages
-```bash
-ros2 topic list
-/int32_publisher_main
-/parameter_events
-/rosout
-
-ros2 topic echo int32_publisher_main
-data: 28
----
-data: 29
----
-data: 30
----
-.....
-```
-
 ## How to use Pico SDK?
 
 Here is a Raspberry Pi Pico C/C++ SDK documentation:
 https://datasheets.raspberrypi.org/pico/raspberry-pi-pico-c-sdk.pdf
-
-## How to build the precompiled library (ADVANCED)
-
-Micro-ROS is precompiled for Raspberry Pi Pico in [`libmicroros`](libmicroros).
-If you want to compile it by yourself:
-
-```bash
-docker pull microros/micro_ros_static_library_builder:humble
-docker run -it --rm -v $(pwd):/project microros/micro_ros_static_library_builder:humble
-```
 
 ## License
 
