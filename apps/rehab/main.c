@@ -51,6 +51,12 @@ struct SystemState {
 struct SystemState state = {0.0f, 0.0f, false};
 SemaphoreHandle_t xMutex;
 
+TaskHandle_t xHandleROS = NULL;
+TaskHandle_t xHandleHeartbeat = NULL;
+TaskHandle_t xHandleTremor = NULL;
+TaskHandle_t xHandleInput = NULL;
+TaskHandle_t xHandleBuzzer = NULL;
+
 // Variabili globali per micro-ROS
 rcl_publisher_t publisher;
 rcl_subscription_t subscriber;
@@ -307,11 +313,17 @@ int main() {
 
     xMutex = xSemaphoreCreateMutex();
 
-    xTaskCreate(Task_Tremor, "Tremor", 512, NULL, 4, NULL);
-    xTaskCreate(Task_Buzzer, "Buzzer", 256, NULL, 4, NULL);
-    xTaskCreate(Task_Input, "Input", 256, NULL, 3, NULL);
-    xTaskCreate(Task_ROS, "ROS", 2048, NULL, 2, NULL);
-    xTaskCreate(Task_Heartbeat, "Heartbeat", 128, NULL, 1, NULL);
+    xTaskCreate(Task_Tremor, "Tremor", 512, NULL, 4, xHandleTremor);
+    xTaskCreate(Task_Buzzer, "Buzzer", 256, NULL, 4, xHandleBuzzer);
+    xTaskCreate(Task_Input, "Input", 256, NULL, 3, xHandleInput);
+    xTaskCreate(Task_ROS, "ROS", 2048, NULL, 2, xHandleROS);
+    xTaskCreate(Task_Heartbeat, "Heartbeat", 128, NULL, 1, xHandleHeartbeat);
+
+    vTaskCoreAffinitySet(xHandleROS, (1 << 0));
+    vTaskCoreAffinitySet(xHandleHeartbeat, (1 << 0));
+    vTaskCoreAffinitySet(xHandleTremor, (1 << 1));
+    vTaskCoreAffinitySet(xHandleInput, (1 << 1));
+    vTaskCoreAffinitySet(xHandleBuzzer, (1 << 1));
 
     vTaskStartScheduler();
 }
