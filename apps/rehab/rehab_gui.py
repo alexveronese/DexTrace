@@ -33,7 +33,7 @@ class RehabApp(Node):
         self.active = False
         self.last_active_state = False
 
-        self.error_threshold = 35.0 
+        self.error_threshold = 45.0 
         self.speed = 0.008     
         self.tremor_val = 0.0      
 
@@ -50,8 +50,8 @@ class RehabApp(Node):
         self.last_active_state = new_active
 
         if self.active:
-            self.user_pos[0] += msg.linear.x * 12
-            self.user_pos[1] += msg.linear.y * 12
+            self.user_pos[0] += msg.linear.x * 10
+            self.user_pos[1] += msg.linear.y * 10
 
         self.tremor_val = msg.angular.x
 
