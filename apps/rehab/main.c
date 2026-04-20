@@ -37,19 +37,33 @@ const uint PIN_JOY_Y = 27;
 const uint PIN_BTN_START = 21;
 const uint PIN_BUZZER = 15;
 
-// Risorse Condivise e Concorrenza
+
+// --- STRUTTURE DATI ---
+
+// 1. Pacchetto per la CODA (Trasporto dati verso ROS)
+// Garantisce la coerenza temporale: ogni pacchetto è un'istantanea atomica.
+typedef struct {
+    float x;
+    float y;
+    float tremor;
+    bool active; 
+} SensorPacket_t;
+
+// 2. Stato Globale del Sistema (Condiviso via Mutex)
+// Serve per il controllo degli attuatori (LED, Buzzer) in tempo reale.
+struct SystemState {
+    bool active;
+    float current_tremor_intensity;
+};
+
+// --- RISORSE DI CONCORRENZA ---
+struct SystemState global_state = {false, 0.0f};
 bool collision_alarm = false;
 uint32_t last_ros_message_time = 0;
 const uint32_t ROS_WATCHDOG_TIMEOUT = 1000;
 
-struct SystemState {
-    float x, y;
-    float tremor_intensity;
-    bool active;
-};
-
-struct SystemState state = {0.0f, 0.0f, false};
 SemaphoreHandle_t xMutex;
+QueueHandle_t xSensorQueue;
 
 TaskHandle_t xHandleROS = NULL;
 TaskHandle_t xHandleHeartbeat = NULL;
@@ -95,105 +109,86 @@ void subscription_callback(const void * msin) {
 // --- TASK 1: GESTIONE INPUT (Alta Priorità) ---
 void Task_Input(void *pvParameters) {
     bool last_btn_state = true;
-    
-    float center_x = 2048.0f;
-    float center_y = 2048.0f;
-    
-    // Imposta la tua Deadzone collaudata al 5%
-    const float DEADZONE = 0.05f; 
+    const float DEADZONE = 0.05f;
+    SensorPacket_t packet;
 
     for (;;) {
-        // Leggi ADC (Joystick)
+        // Lettura Joystick
         adc_select_input(0);
-        // Normalizziamo usando il VERO centro calcolato, non più 2048 fisso
-        float raw_x = (adc_read() - center_x)/center_x; 
-        
+        float raw_x = ((float)adc_read() - 2048.0f) / 2048.0f;
         adc_select_input(1);
-        float raw_y = (adc_read() - center_y)/center_y;
+        float raw_y = ((float)adc_read() - 2048.0f) / 2048.0f;
 
-        // --- APPLICAZIONE DEADZONE ---
-        if (fabs(raw_x) < DEADZONE) {
-            raw_x = 0.0f;
-        }
-        if (fabs(raw_y) < DEADZONE) {
-            raw_y = 0.0f;
-        }
+        if (fabs(raw_x) < DEADZONE) raw_x = 0.0f;
+        if (fabs(raw_y) < DEADZONE) raw_y = 0.0f;
 
-        // Gestione Pulsante Start/Stop (Debounce)
+        // Gestione Pulsante con Debounce
         bool current_btn_state = gpio_get(PIN_BTN_START);
-        if (last_btn_state && !current_btn_state) { 
+        if (last_btn_state && !current_btn_state) {
             vTaskDelay(pdMS_TO_TICKS(50));
             if (!gpio_get(PIN_BTN_START)) {
                 xSemaphoreTake(xMutex, portMAX_DELAY);
-                state.active = !state.active; 
+                global_state.active = !global_state.active;
                 xSemaphoreGive(xMutex);
             }
         }
         last_btn_state = current_btn_state;
 
-        // Aggiorna coordinate nella risorsa condivisa
+        // Creazione "Istantanea" per ROS (Encapsulation)
         xSemaphoreTake(xMutex, portMAX_DELAY);
-        state.x = raw_x;
-        state.y = raw_y;
+        packet.x = raw_x;
+        packet.y = raw_y;
+        packet.tremor = global_state.current_tremor_intensity;
+        packet.active = global_state.active;
         xSemaphoreGive(xMutex);
 
-        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz costanti
+        // Invio alla Coda (Sovrascrittura = vogliamo solo l'ultimo dato fresco)
+        xQueueOverwrite(xSensorQueue, &packet);
+
+        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz
     }
 }
 
 // --- TASK 2: MICRO-ROS (Media Priorità) ---
 void Task_ROS(void *pvParameters) {
-    // 1. Setup Trasporto e Allocatore
     rmw_uros_set_custom_transport(true, NULL, pico_serial_transport_open, pico_serial_transport_close, pico_serial_transport_write, pico_serial_transport_read);
     allocator = rcl_get_default_allocator();
-
-    // 2. Inizializzazione Support e Node
     rclc_support_init(&support, 0, NULL, &allocator);
     rclc_node_init_default(&node, "pico_rehab_node", "", &support);
 
-    // 3. Inizializzazione Publisher (Joystick -> PC)
-    rclc_publisher_init_default(&publisher, &node, 
-        ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "/surgeon_input");
+    rclc_publisher_init_default(&publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "/surgeon_input");
+    rclc_subscription_init_default(&subscriber, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool), "/collision_alert");
 
-    // 4. Inizializzazione Subscriber (PC -> Buzzer)
-    rclc_subscription_init_default(&subscriber, &node, 
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool), "/collision_alert");
-
-    // 5. Setup Executor: deve gestire 1 comunicazione in ingresso (il subscriber)
     rclc_executor_init(&executor, &support.context, 1, &allocator);
     rclc_executor_add_subscription(&executor, &subscriber, &msg_sub, &subscription_callback, ON_NEW_DATA);
 
-    for (;;) {
-        uint32_t current_time = to_ms_since_boot(get_absolute_time());
+    SensorPacket_t data_from_queue;
 
-        // --- LOGICA DI RESET AUTOMATICO (WATCHDOG) ---
-        // Se l'ultimo messaggio dal PC è più vecchio del timeout
-        if (current_time - last_ros_message_time > ROS_WATCHDOG_TIMEOUT) {
+    for (;;) {
+        uint32_t now = to_ms_since_boot(get_absolute_time());
+
+        // Watchdog di Connessione
+        if (now - last_ros_message_time > ROS_WATCHDOG_TIMEOUT) {
             xSemaphoreTake(xMutex, portMAX_DELAY);
-            if (state.active) {
-                state.active = false; // Forza il reset dello stato
-                collision_alarm = false; // Spegne l'allarme
-                printf("Connessione PC persa: Reset sistema in Standby.\n");
+            if (global_state.active) {
+                global_state.active = false;
+                collision_alarm = false;
             }
             xSemaphoreGive(xMutex);
         }
-        
-        // Lettura protetta dallo stato per il publishing
-        xSemaphoreTake(xMutex, portMAX_DELAY);
-        msg_pub.linear.x = state.x;
-        msg_pub.linear.y = state.y;
-        msg_pub.angular.z = state.active ? 1.0 : 0.0;
-        msg_pub.angular.x = state.tremor_intensity;
-        xSemaphoreGive(xMutex);
 
-        // Pubblichiamo la posizione dell'utente
-        rcl_publish(&publisher, &msg_pub, NULL);
+        // Consumiamo il pacchetto dalla coda
+        if (xQueueReceive(xSensorQueue, &data_from_queue, 0) == pdPASS) {
+            msg_pub.linear.x = data_from_queue.x;
+            msg_pub.linear.y = data_from_queue.y;
+            msg_pub.angular.x = data_from_queue.tremor;
+            msg_pub.angular.z = data_from_queue.active ? 1.0f : 0.0f;
+            
+            rcl_publish(&publisher, &msg_pub, NULL);
+        }
 
-        // Controlliamo se sono arrivati messaggi dal PC (l'allarme)
-        // timeout_ns = 0 significa "controlla e vai avanti senza bloccarti"
         rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
-
-        vTaskDelay(pdMS_TO_TICKS(30)); // Frequenza di rete (~33Hz)
+        vTaskDelay(pdMS_TO_TICKS(30)); 
     }
 }
 
@@ -201,18 +196,14 @@ void Task_ROS(void *pvParameters) {
 void Task_Buzzer(void *pvParameters) {
     for (;;) {
         xSemaphoreTake(xMutex, portMAX_DELAY);
-        bool is_active = state.active;
-        bool alarm = collision_alarm;
+        bool run = global_state.active && collision_alarm;
         xSemaphoreGive(xMutex);
 
-        if (is_active && alarm) {
-            gpio_put(PIN_BUZZER, 1);
-            vTaskDelay(pdMS_TO_TICKS(80));
-            gpio_put(PIN_BUZZER, 0);
-            vTaskDelay(pdMS_TO_TICKS(80));
+        if (run) {
+            gpio_put(PIN_BUZZER, 1); vTaskDelay(pdMS_TO_TICKS(80));
+            gpio_put(PIN_BUZZER, 0); vTaskDelay(pdMS_TO_TICKS(80));
         } else {
-            gpio_put(PIN_BUZZER, 0);
-            vTaskDelay(pdMS_TO_TICKS(100));
+            gpio_put(PIN_BUZZER, 0); vTaskDelay(pdMS_TO_TICKS(100));
         }
     }
 }
@@ -221,46 +212,31 @@ void Task_Buzzer(void *pvParameters) {
 void Task_Tremor(void *pvParameters) {
     int16_t accel[3];
     float samples[20] = {0};
-    int sample_idx = 0;
-    const float TREMOR_THRESHOLD = 0.7f; // La tua soglia ottimizzata
+    int idx = 0;
 
     for (;;) {
         mpu6050_read_raw(accel);
-        
-        float ax = accel[0] / 16384.0f;
-        float ay = accel[1] / 16384.0f;
-        float az = accel[2] / 16384.0f;
-        float mag = sqrt(ax*ax + ay*ay + az*az);
+        float mag = sqrt(pow(accel[0]/16384.0f, 2) + pow(accel[1]/16384.0f, 2) + pow(accel[2]/16384.0f, 2));
+        samples[idx] = mag;
+        idx = (idx + 1) % 20;
 
-        samples[sample_idx] = mag;
-        sample_idx = (sample_idx + 1) % 20;
-
-        // Calcolo varianza (intensità tremore)
-        float mean = 0;
+        float mean = 0, var = 0;
         for(int i=0; i<20; i++) mean += samples[i];
         mean /= 20.0f;
-
-        float var = 0;
         for(int i=0; i<20; i++) var += pow(samples[i] - mean, 2);
-        var /= 20.0f;
-        float current_intensity = var * 100.0f;
+        float intensity = (var / 20.0f) * 100.0f;
 
-        // --- SINCRONIZZAZIONE CON LO STATO ATTIVO ---
         xSemaphoreTake(xMutex, portMAX_DELAY);
-        bool is_active = state.active; 
-        
-        if (is_active) {
-            state.tremor_intensity = current_intensity;
-            bool is_shaking = (state.tremor_intensity > TREMOR_THRESHOLD);
-            gpio_put(PIN_LED_TREMOR, is_shaking);
+        if (global_state.active) {
+            global_state.current_tremor_intensity = intensity;
+            gpio_put(PIN_LED_TREMOR, intensity > 0.7f);
         } else {
-            // Se il sistema è in STOP, forziamo tutto a zero
-            state.tremor_intensity = 0.0f;
+            global_state.current_tremor_intensity = 0.0f;
             gpio_put(PIN_LED_TREMOR, 0);
         }
         xSemaphoreGive(xMutex);
 
-        vTaskDelay(pdMS_TO_TICKS(10)); 
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
@@ -268,20 +244,13 @@ void Task_Tremor(void *pvParameters) {
 void Task_Heartbeat(void *pvParameters) {
     for (;;) {
         xSemaphoreTake(xMutex, portMAX_DELAY);
-        bool is_active = state.active;
+        bool active = global_state.active;;
         xSemaphoreGive(xMutex);
 
-        if (!is_active) {
-            // Blink lento (Ready state): 100ms ON, 900ms OFF
-            gpio_put(LED_PIN, 1);
-            vTaskDelay(pdMS_TO_TICKS(100));
-            gpio_put(LED_PIN, 0);
-            vTaskDelay(pdMS_TO_TICKS(900));
-        } else {
-            // Luce fissa (In Exercise): Il sistema sta registrando
-            gpio_put(LED_PIN, 1);
-            vTaskDelay(pdMS_TO_TICKS(500));
-        }
+        gpio_put(LED_PIN, 1);
+        vTaskDelay(pdMS_TO_TICKS(active ? 500 : 100));
+        gpio_put(LED_PIN, 0);
+        vTaskDelay(pdMS_TO_TICKS(active ? 500 : 900));
     }
 }
 
@@ -312,6 +281,7 @@ int main() {
     gpio_set_dir(LED_PIN, GPIO_OUT);
 
     xMutex = xSemaphoreCreateMutex();
+    xSensorQueue = xQueueCreate(1, sizeof(SensorPacket_t));
 
     xTaskCreate(Task_Tremor, "Tremor", 512, NULL, 4, xHandleTremor);
     xTaskCreate(Task_Buzzer, "Buzzer", 256, NULL, 4, xHandleBuzzer);
