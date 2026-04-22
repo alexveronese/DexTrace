@@ -40,7 +40,13 @@ const uint PIN_BUZZER = 15;
 
 // --- STRUTTURE DATI ---
 
-// 1. Pacchetto per la CODA (Trasporto dati verso ROS)
+// Dynamic configuration received from PC
+typedef struct {
+    float gain;
+    float tremor_threshold;
+} DeviceConfig_t;
+
+// Pacchetto per la CODA (Trasporto dati verso ROS)
 // Garantisce la coerenza temporale: ogni pacchetto è un'istantanea atomica.
 typedef struct {
     float x;
@@ -49,15 +55,16 @@ typedef struct {
     bool active; 
 } SensorPacket_t;
 
-// 2. Stato Globale del Sistema (Condiviso via Mutex)
+// Stato Globale del Sistema (Condiviso via Mutex)
 // Serve per il controllo degli attuatori (LED, Buzzer) in tempo reale.
 struct SystemState {
     bool active;
     float current_tremor_intensity;
+    DeviceConfig_t config;
 };
 
 // --- RISORSE DI CONCORRENZA ---
-struct SystemState global_state = {false, 0.0f};
+struct SystemState global_state = {false, 0.0f, {1.0f, 0.7f}};
 bool collision_alarm = false;
 uint32_t last_ros_message_time = 0;
 const uint32_t ROS_WATCHDOG_TIMEOUT = 1000;
@@ -73,9 +80,11 @@ TaskHandle_t xHandleBuzzer = NULL;
 
 // Variabili globali per micro-ROS
 rcl_publisher_t publisher;
-rcl_subscription_t subscriber;
+rcl_subscription_t subscriber_alarm;
+rcl_subscription_t subscriber_config;
 std_msgs__msg__Bool msg_sub;
 geometry_msgs__msg__Twist msg_pub;
+geometry_msgs__msg__Twist msg_sub_config;
 
 rclc_executor_t executor;
 rclc_support_t support;
@@ -106,6 +115,17 @@ void subscription_callback(const void * msin) {
     last_ros_message_time = to_ms_since_boot(get_absolute_time()); // Registra quando è arrivato
 }
 
+// Update local parameters when PC changes level
+void config_callback(const void * msin) {
+    const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msin;
+    xSemaphoreTake(xMutex, portMAX_DELAY);
+    global_state.config.gain = msg->linear.x;
+    global_state.config.tremor_threshold = msg->linear.y;
+    xSemaphoreGive(xMutex);
+
+    last_ros_message_time = to_ms_since_boot(get_absolute_time());
+}
+
 // --- TASK 1: GESTIONE INPUT (Alta Priorità) ---
 void Task_Input(void *pvParameters) {
     bool last_btn_state = true;
@@ -124,20 +144,25 @@ void Task_Input(void *pvParameters) {
 
         // Gestione Pulsante con Debounce
         bool current_btn_state = gpio_get(PIN_BTN_START);
+
         if (last_btn_state && !current_btn_state) {
             vTaskDelay(pdMS_TO_TICKS(50));
             if (!gpio_get(PIN_BTN_START)) {
                 xSemaphoreTake(xMutex, portMAX_DELAY);
                 global_state.active = !global_state.active;
+                
+                if (!global_state.active) {
+                    collision_alarm = false; 
+                }
                 xSemaphoreGive(xMutex);
             }
         }
         last_btn_state = current_btn_state;
 
-        // Creazione "Istantanea" per ROS (Encapsulation)
+        // Data Encapsulation
         xSemaphoreTake(xMutex, portMAX_DELAY);
-        packet.x = raw_x;
-        packet.y = raw_y;
+        packet.x = raw_x * global_state.config.gain; // Dynamic scaling applied here
+        packet.y = raw_y * global_state.config.gain;
         packet.tremor = global_state.current_tremor_intensity;
         packet.active = global_state.active;
         xSemaphoreGive(xMutex);
@@ -157,12 +182,15 @@ void Task_ROS(void *pvParameters) {
     rclc_node_init_default(&node, "pico_rehab_node", "", &support);
 
     rclc_publisher_init_default(&publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "/surgeon_input");
-    rclc_subscription_init_default(&subscriber, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool), "/collision_alert");
+    rclc_subscription_init_default(&subscriber_alarm, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool), "/collision_alert");
+    rclc_subscription_init_default(&subscriber_config, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "/rehab_config");
 
-    rclc_executor_init(&executor, &support.context, 1, &allocator);
-    rclc_executor_add_subscription(&executor, &subscriber, &msg_sub, &subscription_callback, ON_NEW_DATA);
+    rclc_executor_init(&executor, &support.context, 2, &allocator);
+    rclc_executor_add_subscription(&executor, &subscriber_alarm, &msg_sub, &subscription_callback, ON_NEW_DATA);
+    rclc_executor_add_subscription(&executor, &subscriber_config, &msg_sub_config, &config_callback, ON_NEW_DATA);
 
     SensorPacket_t data_from_queue;
+    last_ros_message_time = to_ms_since_boot(get_absolute_time());
 
     for (;;) {
         uint32_t now = to_ms_since_boot(get_absolute_time());
@@ -229,7 +257,7 @@ void Task_Tremor(void *pvParameters) {
         xSemaphoreTake(xMutex, portMAX_DELAY);
         if (global_state.active) {
             global_state.current_tremor_intensity = intensity;
-            gpio_put(PIN_LED_TREMOR, intensity > 0.7f);
+            gpio_put(PIN_LED_TREMOR, intensity > global_state.config.tremor_threshold);
         } else {
             global_state.current_tremor_intensity = 0.0f;
             gpio_put(PIN_LED_TREMOR, 0);
@@ -283,11 +311,11 @@ int main() {
     xMutex = xSemaphoreCreateMutex();
     xSensorQueue = xQueueCreate(1, sizeof(SensorPacket_t));
 
-    xTaskCreate(Task_Tremor, "Tremor", 512, NULL, 4, xHandleTremor);
-    xTaskCreate(Task_Buzzer, "Buzzer", 256, NULL, 4, xHandleBuzzer);
-    xTaskCreate(Task_Input, "Input", 256, NULL, 3, xHandleInput);
-    xTaskCreate(Task_ROS, "ROS", 2048, NULL, 2, xHandleROS);
-    xTaskCreate(Task_Heartbeat, "Heartbeat", 128, NULL, 1, xHandleHeartbeat);
+    xTaskCreate(Task_Tremor, "Tremor", 512, NULL, 4, &xHandleTremor);
+    xTaskCreate(Task_Buzzer, "Buzzer", 256, NULL, 4, &xHandleBuzzer);
+    xTaskCreate(Task_Input, "Input", 256, NULL, 3, &xHandleInput);
+    xTaskCreate(Task_ROS, "ROS", 2048, NULL, 2, &xHandleROS);
+    xTaskCreate(Task_Heartbeat, "Heartbeat", 128, NULL, 1, &xHandleHeartbeat);
 
     vTaskCoreAffinitySet(xHandleROS, (1 << 0));
     vTaskCoreAffinitySet(xHandleHeartbeat, (1 << 0));

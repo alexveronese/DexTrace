@@ -2,147 +2,215 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Bool
-import random
 import pygame
 import time
 import math
-import sys
+import random
 
-TREMOR_THRESH = 0.5
+# --- Graphics and Levels ---
+COLORS = {
+    "bg": (10, 12, 15),
+    "panel": (25, 30, 40),
+    "text": (240, 240, 240),
+    "accent": (0, 200, 255),
+    "danger": (255, 50, 50),
+    "success": (50, 255, 100),
+    "warning": (255, 165, 0),
+    "border": (255, 255, 0)
+}
+
+LEVELS = {
+    1: {"name": "REACHING", "gain": 1.2, "err_max": 55.0, "eval_thresh": 1.5,  "speed": 0.0,   "t_thresh": 0.7},
+    2: {"name": "TRACKING", "gain": 2.4, "err_max": 45.0, "eval_thresh": 50.0, "speed": 0.008, "t_thresh": 0.5},
+    3: {"name": "CHASING",  "gain": 3.0, "err_max": 40.0, "eval_thresh": 70.0, "speed": 0.015, "t_thresh": 0.3}
+}
 
 class RehabApp(Node):
     def __init__(self):
         super().__init__('rehab_app')
         self.sub = self.create_subscription(Twist, '/surgeon_input', self.pos_callback, 10)
-        self.pub = self.create_publisher(Bool, '/collision_alert', 10)
+        self.pub_alert = self.create_publisher(Bool, '/collision_alert', 10)
+        self.pub_config = self.create_publisher(Twist, '/rehab_config', 10)
         
         pygame.init()
-        
-        # --- MODIFICA 1: SCHERMO INTERO DINAMICO ---
-        # --- DIMENSIONI FISSE PER STABILITÀ SU WSL2 ---
         self.w, self.h = 1280, 720
         self.screen = pygame.display.set_mode((self.w, self.h))
-        pygame.display.set_caption("Virtual Rehab - WSL2 Stable Version")
+        pygame.display.set_caption("DexTrace - v1.0")
         
+        self.f_huge = pygame.font.SysFont("Verdana", 90, bold=True)
+        self.f_big = pygame.font.SysFont("Verdana", 50, bold=True)
+        self.f_med = pygame.font.SysFont("Verdana", 35)
+        
+        self.state = "WAITING" 
+        self.level = 1
         self.center_x, self.center_y = self.w // 2, self.h // 2
-        
         self.user_pos = [float(self.center_x), float(self.center_y)]
-        self.target_pos = [float(self.center_x), float(self.center_y)]
-
-        self.angle = 0.0
-        self.active = False
-        self.last_active_state = False
-
-        self.error_threshold = 45.0 
-        self.speed = 0.008     
-        self.tremor_val = 0.0      
+        
+        self.last_transition_time = 0.0
+        self.debounce_delay = 0.6
+        self.pico_active = False
+        self.last_pico_active = False
 
     def pos_callback(self, msg):
-        new_active = msg.angular.z > 0.5
+        self.pico_active = msg.angular.z > 0.5
+        self.tremor_val = msg.angular.x
+        now = time.time()
+
+        if self.pico_active and not self.last_pico_active:
+            if (now - self.last_transition_time) > self.debounce_delay:
+                if self.state in ["WAITING", "RESULTS"]: self.load_level()
+                elif self.state == "LOADED": self.start_exercise()
+                self.last_transition_time = now
         
-        # --- NOVITÀ: SNAP AL TARGET ALLA PARTENZA ---
-        if new_active and not self.last_active_state:
-            self.user_pos = [float(self.center_x), float(self.center_y)]
-            self.angle = 0.0
-            print("Exercise started: cursor initialized!")
+        elif not self.pico_active and self.last_pico_active:
+            if self.state == "ACTIVE" and (now - self.last_transition_time) > self.debounce_delay:
+                self.stop_exercise(interrupted=True)
+                self.last_transition_time = now
 
-        self.active = new_active
-        self.last_active_state = new_active
-
-        if self.active:
+        self.last_pico_active = self.pico_active
+        if self.state == "ACTIVE":
             self.user_pos[0] += msg.linear.x * 10
             self.user_pos[1] += msg.linear.y * 10
 
-        self.tremor_val = msg.angular.x
+    def load_level(self):
+        self.state = "LOADED"
+        m = Twist()
+        m.linear.x = LEVELS[self.level]["gain"]
+        m.linear.y = LEVELS[self.level]["t_thresh"]
+        self.pub_config.publish(m)
+        self.pub_alert.publish(Bool(data=False))        #RESET ALARM
 
+    def start_exercise(self):
+        self.state = "ACTIVE"
+        if self.level == 2:
+            self.user_pos = [float(self.center_x + 250), float(self.center_y)]
+        else:
+            self.user_pos = [float(self.center_x), float(self.center_y)]
+
+        self.start_pos = list(self.user_pos)
+        self.path_length = 0.0
+        self.last_sample = list(self.user_pos)
+        self.angle = 0.0
+        self.start_time = time.time()
+        self.session_data = []
+
+    def stop_exercise(self, interrupted=False):
+        self.state = "RESULTS"
+        self.pub_alert.publish(Bool(data=False))
+        l_cfg = LEVELS[self.level]
+        
+        if interrupted:
+            self.last_results = {"status": "INTERRUPTED", "msg": "Session cancelled by the user", "color": COLORS["warning"]}
+        else:
+            if self.level == 1:
+                opt = math.hypot(self.target_pos[0]-self.start_pos[0], self.target_pos[1]-self.start_pos[1])
+                val = self.path_length / opt if opt > 0 else 1.0
+                name, success = "Path Efficency", val < l_cfg["eval_thresh"]
+            else:
+                val = math.sqrt(sum([d**2 for d in self.session_data])/len(self.session_data)) if self.session_data else 999
+                name, success = "Accuracy (RMSE)", val < l_cfg["eval_thresh"]
+
+            if success:
+                sugg = "GREAT!" if self.level == 3 else f"Level {self.level+1} unlocked"
+                if self.level < 3: self.level += 1
+            else:
+                sugg = "Try again to became a DexMaster"
+
+            self.last_results = {
+                "status": "SUCCESS" if success else "FAIL",
+                "val": val, "name": name, "sugg": sugg,
+                "color": COLORS["success"] if success else COLORS["danger"]
+            }
+
+    def draw_ui_elements(self, elapsed, dist, l_cfg):
+        # Sfondo e Target
+        self.screen.fill(COLORS["bg"])
+        
+        color = COLORS["success"] 
+        if dist > l_cfg["err_max"]:
+            color = COLORS["danger"]
+        elif dist > l_cfg["err_max"] * 0.75:
+            color = COLORS["border"]
+        
+        pygame.draw.circle(self.screen, color, (int(self.target_pos[0]), int(self.target_pos[1])), int(l_cfg["err_max"]), 3)
+        
+        # Cursore con shake se tremore alto
+        u_col = COLORS["text"] if self.tremor_val < l_cfg["t_thresh"] else COLORS["warning"]
+        shake = [random.uniform(-3,3), random.uniform(-3,3)] if u_col == COLORS["warning"] else [0,0]
+        pygame.draw.circle(self.screen, u_col, (int(self.user_pos[0]+shake[0]), int(self.user_pos[1]+shake[1])), 12)
+        
+        # Header Info
+        header = self.f_med.render(f"Level {self.level} - {l_cfg['name']}", True, COLORS["accent"])
+        self.screen.blit(header, (40, 30))
+        
+        # Barra Tempo
+        pygame.draw.rect(self.screen, COLORS["panel"], (self.center_x-250, 40, 500, 15))
+        pygame.draw.rect(self.screen, COLORS["accent"], (self.center_x-250, 40, int(500*(1-elapsed/10)), 15))
 
     def run(self):
         clock = pygame.time.Clock()
-        try:
-            while rclpy.ok():
-                for event in pygame.event.get():
-                    # ESC per uscire dal fullscreen
-                    if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                        return
-                    if event.type == pygame.QUIT:
-                        return
+        while rclpy.ok():
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT: return
 
-                self.screen.fill((15, 15, 15))
+            if self.state == "WAITING":
+                self.screen.fill(COLORS["bg"])
+                t = self.f_big.render("DEXTRACE SYSTEM READY", True, COLORS["text"])
+                self.screen.blit(t, t.get_rect(center=(self.center_x, self.center_y)))
 
-                if not self.active:
-                    self.target_pos = [self.center_x, self.center_y]
-                    font = pygame.font.SysFont(None, 72)
-                    text = font.render("PRESS THE BUTTON TO START", True, (0, 200, 255))
-                    text_rect = text.get_rect(center=(self.center_x, self.center_y - 100))
-                    self.screen.blit(text, text_rect)
-                    
-                    # Disegna target di attesa
-                    pygame.draw.circle(self.screen, (100, 100, 100), self.target_pos, int(self.error_threshold), 2)
-                    
-                    # Forza allarme spento mentre non è attivo
-                    msg = Bool()
-                    msg.data = False
-                    self.pub.publish(msg)
-                else:
-                    # --- MODIFICA 2: PARTENZA DAL CENTRO ---
-                    # Usiamo una funzione a raggio crescente per far uscire il target dal centro
-                    # oppure semplicemente iniziamo l'orbita. Qui facciamo un'orbita ellittica:
-                    expansion = (1 - math.exp(-self.angle))
-                    self.target_pos[0] = self.center_x + (400 * expansion) * math.cos(self.angle)
-                    self.target_pos[1] = self.center_y + (250 * expansion) * math.sin(self.angle)
-                    self.angle += self.speed
+            elif self.state == "LOADED":
+                self.screen.fill(COLORS["panel"])
+                t = self.f_big.render(f"LEVEL {self.level} LOADED", True, COLORS["accent"])
+                s = self.f_med.render("PRESS THE BUTTON TO START", True, COLORS["text"])
+                self.screen.blit(t, t.get_rect(center=(self.center_x, self.center_y-40)))
+                self.screen.blit(s, s.get_rect(center=(self.center_x, self.center_y+40)))
+                self.pub_alert.publish(Bool(data=False)) #HEARTBEAT FOR THE PICO WATCHDOG
 
-                    # Calcolo Distanza ed Errore
-                    dist = math.sqrt((self.user_pos[0]-self.target_pos[0])**2 + (self.user_pos[1]-self.target_pos[1])**2)
-                    
-                    color = (0, 255, 0) 
-                    is_alarm = False
-
-                    if dist > self.error_threshold:
-                        color = (255, 0, 0)
-                        is_alarm = True
-                    elif dist > self.error_threshold * 0.75:
-                        color = (255, 255, 0) # GIALLO sul bordo
-
-                    user_color = (255, 255, 255)
-                    shake_offset = [0, 0]
-                    if self.tremor_val > TREMOR_THRESH: # Soglia tremore
-                        user_color = (255, 165, 0) # Arancione
-                        shake_offset = [random.uniform(-2, 2), random.uniform(-2, 2)]
-
-                    alert_msg = Bool()
-                    alert_msg.data = is_alarm
-                    self.pub.publish(alert_msg)
-
-                    pygame.draw.circle(self.screen, color, (int(self.target_pos[0]), int(self.target_pos[1])), int(self.error_threshold), 4)
-                    pygame.draw.circle(self.screen, user_color, (int(self.user_pos[0] + shake_offset[0]), int(self.user_pos[1] + shake_offset[1])), 10)
-
-                    # HUD Info
-                    font_small = pygame.font.SysFont(None, 30)
-                    tremor_text = font_small.render(f"Tremor: {self.tremor_val:.2f}", True, user_color)
-                    self.screen.blit(tremor_text, (20, 20))
+            elif self.state == "ACTIVE":
+                elapsed = time.time() - self.start_time
+                if elapsed > 10.0: self.stop_exercise(); continue
                 
-                pygame.display.flip()
-                clock.tick(60)
-                rclpy.spin_once(self, timeout_sec=0.001)
-        finally:
-            print("Chiusura in corso: reset allarmi...")
-            msg = Bool()
-            msg.data = False
-            for _ in range(10): # Aumentiamo a 10 per sicurezza
-                self.pub.publish(msg)
-            
-            # Fondamentale: diamo tempo a ROS di inviare i pacchetti
-            time.sleep(0.2) 
-            
-            pygame.quit()
+                l_cfg = LEVELS[self.level]
+                if self.level == 1: self.target_pos = [self.center_x + 350, self.center_y]
+                elif self.level == 2:
+                    self.target_pos = [self.center_x + 250*math.cos(self.angle), self.center_y + 250*math.sin(self.angle)]
+                    self.angle += l_cfg["speed"]
+                else:
+                    exp = (1 - math.exp(-self.angle))
+                    self.target_pos = [self.center_x + 400*exp*math.cos(self.angle), self.center_y + 250*exp*math.sin(self.angle)]
+                    self.angle += l_cfg["speed"]
 
+                dist = math.hypot(self.user_pos[0]-self.target_pos[0], self.user_pos[1]-self.target_pos[1])
+                self.session_data.append(dist)
+                self.path_length += math.hypot(self.user_pos[0]-self.last_sample[0], self.user_pos[1]-self.last_sample[1])
+                self.last_sample = list(self.user_pos)
+                
+                self.pub_alert.publish(Bool(data=(dist > l_cfg["err_max"])))
+                self.draw_ui_elements(elapsed, dist, l_cfg)
 
-def main():
-    rclpy.init()
-    node = RehabApp()
-    node.run()
-    rclpy.shutdown()
+            elif self.state == "RESULTS":
+                self.screen.fill(COLORS["bg"])
+                res = self.last_results
+                title = self.f_huge.render(res["status"], True, res["color"])
+                self.screen.blit(title, title.get_rect(center=(self.center_x, 180)))
+                
+                if "val" in res:
+                    m = self.f_big.render(f"{res['name']}: {res['val']:.2f}", True, COLORS["text"])
+                    s = self.f_med.render(res["sugg"], True, COLORS["accent"])
+                    self.screen.blit(m, m.get_rect(center=(self.center_x, 350)))
+                    self.screen.blit(s, s.get_rect(center=(self.center_x, 480)))
+                else:
+                    m = self.f_big.render(res["msg"], True, COLORS["text"])
+                    self.screen.blit(m, m.get_rect(center=(self.center_x, 350)))
+
+                hint = self.f_med.render("PRESS TO CONTINUE", True, (80, 80, 80))
+                self.screen.blit(hint, hint.get_rect(center=(self.center_x, 620)))
+
+            pygame.display.flip()
+            clock.tick(60)
+            rclpy.spin_once(self, timeout_sec=0.001)
 
 if __name__ == '__main__':
-    main()
+    rclpy.init()
+    RehabApp().run()
+    rclpy.shutdown()
