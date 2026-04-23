@@ -1,3 +1,31 @@
+# DexTrace
+High-precision neuro-rehabilitation and micro-surgery training interface.
+
+DexTrace is an integrated hardware-software system designed to train and rehabilitate fine motor coordination and stability. By combining a Raspberry Pi Pico controller with a Python-based GUI, the system evaluates user performance across three progressive difficulty levels, monitoring spatial precision and tremor intensity in real-time.
+
+## Key Features
+- Real-Time Architecture: Bidirectional communication based on ROS 2 (micro-ROS) between the microcontroller and PC.
+- Tremor Analysis: Integrated MPU6050 IMU for calculating real-time tremor variance and intensity.
+- Multimodal Feedback: Hardware-managed acoustic alarms (Buzzer) and visual feedback (Shake & Color) on screen.
+
+- Clinical Evaluation Protocol:
+    - Level 1 (Reaching): Path efficiency and target acquisition assessment.
+    - Level 2 (Tracking): Smooth circular target following.
+    - Level 3 (Chasing): Non-linear dynamics to simulate complex surgical scenarios.
+
+## 🛠️ System Requirements
+
+Hardware:
+- Raspberry Pi Pico (or Pico W)
+- MPU6050 IMU Sensor (via I2C)
+- Analog Joystick (2-axis + integrated button)
+- Active Buzzer and LEDs for status signaling
+
+Software:
+- ROS 2 (Humble or later)
+- Micro-ROS Agent
+- Python 3.10+
+- Python Libraries: ``` bash pygame```, ``` bash rclpy```, ``` bash math```, ``` bash geometry_msgs```, ``` bash std_msgs```
 
 # microROS workspace with FreeRTOS for  Raspberry Pi Pico SDK
 
