@@ -58,7 +58,10 @@ class RehabApp(Node):
 
         if self.pico_active and not self.last_pico_active:
             if (now - self.last_transition_time) > self.debounce_delay:
-                if self.state in ["WAITING", "RESULTS"]: self.load_level()
+                if self.level == 4: 
+                    pygame.quit()
+                    exit()
+                elif self.state in ["WAITING", "RESULTS"]: self.load_level()
                 elif self.state == "LOADED": self.start_exercise()
                 self.last_transition_time = now
         
@@ -111,8 +114,8 @@ class RehabApp(Node):
                 name, success = "Accuracy (RMSE)", val < l_cfg["eval_thresh"]
 
             if success:
-                sugg = "GREAT!" if self.level == 3 else f"Level {self.level+1} unlocked"
-                if self.level < 3: self.level += 1
+                sugg = "GREAT! TEST PASSED" if self.level == 3 else f"Level {self.level+1} unlocked"
+                self.level += 1
             else:
                 sugg = "Try again to became a DexMaster"
 
@@ -140,8 +143,12 @@ class RehabApp(Node):
         pygame.draw.circle(self.screen, u_col, (int(self.user_pos[0]+shake[0]), int(self.user_pos[1]+shake[1])), 12)
         
         # Header Info
-        header = self.f_med.render(f"Level {self.level} - {l_cfg['name']}", True, COLORS["accent"])
-        self.screen.blit(header, (40, 30))
+        header = self.f_med.render(f"LEVEL {self.level} - {l_cfg['name']}", True, COLORS["accent"])
+        self.screen.blit(header, (40, 25))
+        # HUD Info
+        font_small = pygame.font.SysFont(None, 35)
+        tremor_text = font_small.render(f"Tremor Intensity: {self.tremor_val:.2f}", True, u_col)
+        self.screen.blit(tremor_text, (40, 80))
         
         # Barra Tempo
         pygame.draw.rect(self.screen, COLORS["panel"], (self.center_x-250, 40, 500, 15))
@@ -203,7 +210,11 @@ class RehabApp(Node):
                     m = self.f_big.render(res["msg"], True, COLORS["text"])
                     self.screen.blit(m, m.get_rect(center=(self.center_x, 350)))
 
-                hint = self.f_med.render("PRESS TO CONTINUE", True, (80, 80, 80))
+                if self.level == 4:
+                    hint = self.f_med.render("PRESS TO EXIT", True, (80, 80, 80))
+                else:
+                    hint = self.f_med.render("PRESS TO CONTINUE", True, (80, 80, 80))
+                
                 self.screen.blit(hint, hint.get_rect(center=(self.center_x, 620)))
 
             pygame.display.flip()
