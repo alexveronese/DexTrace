@@ -146,10 +146,6 @@ The project utilizes a **Finite State Machine** (FSM) to ensure safety and smoot
 * *ACTIVE*: 100Hz data streaming and watchdog monitoring;
 * *RESULTS*: Statistical processing of the session and score calculation.
 
-## How to use Pico SDK?
-Here is a Raspberry Pi Pico C/C++ SDK documentation:
-https://datasheets.raspberrypi.org/pico/raspberry-pi-pico-c-sdk.pdf
-
 ## License
 This repository is open-sourced under the Apache-2.0 license. See the [LICENSE](LICENSE) file for details. The content of this repository is derived from [micro_ros_raspberrypi_pico_sdk](https://github.com/micro-ROS/micro_ros_raspberrypi_pico_sdk.git) and [RTES_freertos_PICO](https://github.com/cscribano/RTES_freertos_PICO/tree/humble).
 
