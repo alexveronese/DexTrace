@@ -2,27 +2,27 @@
 DexTrace is an integrated hardware-software system designed to train and **rehabilitate fine motor coordination** and **stability**. By combining a **Raspberry Pi Pico** controller with a **Python-based GUI**, the system evaluates user performance across three progressive difficulty levels, monitoring spatial precision and tremor intensity in **real-time**.
 
 ## :dart: Key Features
-- Real-Time Architecture: Bidirectional communication based on ROS 2 (micro-ROS) between the microcontroller and PC;
-- Tremor Analysis: Integrated MPU6050 IMU for calculating real-time tremor variance and intensity;
-- Multimodal Feedback: Hardware-managed acoustic alarms (Buzzer) and visual feedback (Shake & Color) on screen;
-- Clinical Evaluation Protocol:
-    - Level 1 (Reaching): Path efficiency and target acquisition assessment;
-    - Level 2 (Tracking): Smooth circular target following;
-    - Level 3 (Chasing): Non-linear dynamics to simulate complex surgical scenarios.
+* **Real-Time Architecture**: Bidirectional communication based on ROS 2 (micro-ROS) between the microcontroller and PC;
+* **Tremor Analysis**: Integrated MPU6050 IMU for calculating real-time tremor variance and intensity;
+* **Multimodal Feedback**: Hardware-managed acoustic alarms (Buzzer) and visual feedback (Shake & Color) on screen;
+* **Clinical Evaluation Protocol**:
+    * *Level 1 (Reaching)*: Path efficiency and target acquisition assessment;
+    * *Level 2 (Tracking)*: Smooth circular target following;
+    * *Level 3 (Chasing)*: Non-linear dynamics to simulate complex surgical scenarios.
 
 ## :clipboard: System Requirements
 **Hardware**:
-* Raspberry PI Pico
-* MPU6050 IMU Sensor
-* Analog Joystick (2-axis + integrated button)
-* Active Buzzer
-* Led (with 220 Ω resistor)
+* Raspberry PI Pico;
+* MPU6050 IMU Sensor;
+* Analog Joystick (2-axis + integrated button);
+* Active Buzzer;
+* Led (with 220 Ω resistor).
 
 **Software**:  
-* ROS 2 (Humble or later - check compatibility with Ubuntu version)
-* Micro-ROS Agent
-* Python 3.10+
-* Python Libraries: ```pygame```, ```rclpy```, ```math```, ```geometry_msgs```, ```std_msgs```
+* ROS 2 (Humble or later - check compatibility with your Ubuntu version);
+* Micro-ROS Agent;
+* Python 3.10+;
+* Python Libraries: ```pygame```, ```rclpy```, ```math```, ```geometry_msgs```, ```std_msgs```.
 
 ## 🔧 Installation & Setup
 ### micro-ROS workspace with FreeRTOS for Raspberry PI Pico SDK
@@ -138,21 +138,17 @@ The system calculates the quality of motor gestures using weighted algorithms:
 
 ## 🏗️ System Architecture
 The project utilizes a **Finite State Machine** (FSM) to ensure safety and smooth operation:
-* WAITING: System idle, sensor calibration active;
-* LOADED: Gain and threshold parameters sent from PC to Pico + Alarm reset;
-* ACTIVE: 100Hz data streaming and watchdog monitoring;
-* RESULTS: Statistical processing of the session and score calculation.
+* *WAITING*: System idle, sensor calibration active;
+* *LOADED*: Gain and threshold parameters sent from PC to Pico + Alarm reset;
+* *ACTIVE*: 100Hz data streaming and watchdog monitoring;
+* *RESULTS*: Statistical processing of the session and score calculation.
 
 ## How to use Pico SDK?
 Here is a Raspberry Pi Pico C/C++ SDK documentation:
 https://datasheets.raspberrypi.org/pico/raspberry-pi-pico-c-sdk.pdf
 
 ## License
-
 This repository is open-sourced under the Apache-2.0 license. See the [LICENSE](LICENSE) file for details. The content of this repository is derived from [micro_ros_raspberrypi_pico_sdk](https://github.com/micro-ROS/micro_ros_raspberrypi_pico_sdk.git) and [RTES_freertos_PICO](https://github.com/cscribano/RTES_freertos_PICO/tree/humble).
 
 For a list of other open-source components included in this repository,
 see the file [3rd-party-licenses.txt](3rd-party-licenses.txt).
-
-## Notes
- This package is released for teaching and educational purposes only.
