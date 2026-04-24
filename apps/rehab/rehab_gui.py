@@ -55,7 +55,7 @@ class RehabApp(Node):
     def pos_callback(self, msg):
         self.pico_active = msg.angular.z > 0.5
         self.tremor_val = msg.angular.x
-        now = time.time()
+        now = time.monotonic()
 
         if self.pico_active and not self.last_pico_active:
             if (now - self.last_transition_time) > self.debounce_delay:
@@ -94,7 +94,7 @@ class RehabApp(Node):
         self.path_length = 0.0
         self.last_sample = list(self.user_pos)
         self.angle = 0.0
-        self.start_time = time.time()
+        self.start_time = time.monotonic()
         self.session_data = []
         self.tremor_data = []
 
@@ -146,7 +146,7 @@ class RehabApp(Node):
 
     def safe_exit(self):
         self.pub_alert.publish(Bool(data=False))
-        time.sleep(0.1) 
+        time.sleep(0.2) 
         pygame.quit()
         sys.exit()
 
@@ -200,7 +200,7 @@ class RehabApp(Node):
                 self.pub_alert.publish(Bool(data=False)) #HEARTBEAT FOR THE PICO WATCHDOG
 
             elif self.state == "ACTIVE":
-                elapsed = time.time() - self.start_time
+                elapsed = time.monotonic() - self.start_time
                 if elapsed > 10.0: self.stop_exercise(); continue
                 
                 l_cfg = LEVELS[self.level]
