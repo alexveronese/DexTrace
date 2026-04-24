@@ -20,9 +20,9 @@ COLORS = {
 }
 
 LEVELS = {
-    1: {"name": "REACHING", "gain": 1.2, "err_max": 55.0, "eval_thresh": 1.5,  "speed": 0.0,   "t_thresh": 0.7},
-    2: {"name": "TRACKING", "gain": 2.4, "err_max": 45.0, "eval_thresh": 50.0, "speed": 0.008, "t_thresh": 0.5},
-    3: {"name": "CHASING",  "gain": 3.0, "err_max": 40.0, "eval_thresh": 70.0, "speed": 0.015, "t_thresh": 0.3}
+    1: {"name": "REACHING", "gain": 1.2, "err_max": 55.0, "eval_thresh": 2.5,  "speed": 0.0,   "t_thresh": 0.7},
+    2: {"name": "TRACKING", "gain": 2.4, "err_max": 45.0, "eval_thresh": 35.0, "speed": 0.008, "t_thresh": 0.5},
+    3: {"name": "CHASING",  "gain": 3.0, "err_max": 40.0, "eval_thresh": 50.0, "speed": 0.015, "t_thresh": 0.3}
 }
 
 class RehabApp(Node):
@@ -96,6 +96,7 @@ class RehabApp(Node):
         self.angle = 0.0
         self.start_time = time.time()
         self.session_data = []
+        self.tremor_data = []
 
     def stop_exercise(self, interrupted=False):
         self.state = "RESULTS"
@@ -104,26 +105,44 @@ class RehabApp(Node):
         
         if interrupted:
             self.last_results = {"status": "INTERRUPTED", "msg": "Session cancelled by the user", "color": COLORS["warning"]}
+            return
+        
+        avg_tremor = sum(self.tremor_data) / len(self.tremor_data) if self.tremor_data else 0
+        tremor_penalty = avg_tremor * 10
+
+        if self.level == 1:
+            dist_to_target = math.hypot(self.user_pos[0]-self.target_pos[0], self.user_pos[1]-self.target_pos[1])
+            reached = dist_to_target < l_cfg["err_max"]
+            
+            opt = math.hypot(self.target_pos[0]-self.start_pos[0], self.target_pos[1]-self.start_pos[1])
+            path_eff = self.path_length / opt if opt > 0 else 1.0
+            val = path_eff + (avg_tremor * 0.5)
+            name = "Dex-Efficiency"
+            success = reached and (val < l_cfg["eval_thresh"])
+
+            if not reached:
+                sugg = "Target not reached! Keep moving."
+            else:
+                sugg = "Level 2 unlocked" if success else "Too much tremor or long path!"
+
         else:
-            if self.level == 1:
-                opt = math.hypot(self.target_pos[0]-self.start_pos[0], self.target_pos[1]-self.start_pos[1])
-                val = self.path_length / opt if opt > 0 else 1.0
-                name, success = "Path Efficency", val < l_cfg["eval_thresh"]
-            else:
-                val = math.sqrt(sum([d**2 for d in self.session_data])/len(self.session_data)) if self.session_data else 999
-                name, success = "Accuracy (RMSE)", val < l_cfg["eval_thresh"]
+            rmse = math.sqrt(sum([d**2 for d in self.session_data])/len(self.session_data)) if self.session_data else 999
+            val = rmse + tremor_penalty
+            name = "Dex-Accuracy (RMSE+T)"
+            success = val < l_cfg["eval_thresh"]
 
-            if success:
-                sugg = "GREAT! TEST PASSED" if self.level == 3 else f"Level {self.level+1} unlocked"
-                self.level += 1
-            else:
-                sugg = "Try again to became a DexMaster"
+        if success:
+            sugg = "GREAT! TEST PASSED" if self.level == 3 else f"Level {self.level+1} unlocked"
+            self.level += 1
+        else:
+            sugg = "Try again to became a DexMaster"
 
-            self.last_results = {
-                "status": "SUCCESS" if success else "FAIL",
-                "val": val, "name": name, "sugg": sugg,
-                "color": COLORS["success"] if success else COLORS["danger"]
-            }
+        self.last_results = {
+            "status": "SUCCESS" if success else "FAIL",
+            "val": val, "name": name, "sugg": sugg,
+            "avg_tremor": avg_tremor,
+            "color": COLORS["success"] if success else COLORS["danger"]
+        }
 
     def draw_ui_elements(self, elapsed, dist, l_cfg):
         # Sfondo e Target
@@ -158,7 +177,10 @@ class RehabApp(Node):
         clock = pygame.time.Clock()
         while rclpy.ok():
             for event in pygame.event.get():
-                if event.type == pygame.QUIT: return
+                if event.type == pygame.QUIT or event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE: 
+                    self.pub_alert.publish(Bool(data=False))
+                    pygame.quit()
+                    exit()
 
             if self.state == "WAITING":
                 self.screen.fill(COLORS["bg"])
@@ -189,6 +211,7 @@ class RehabApp(Node):
 
                 dist = math.hypot(self.user_pos[0]-self.target_pos[0], self.user_pos[1]-self.target_pos[1])
                 self.session_data.append(dist)
+                self.tremor_data.append(self.tremor_val)
                 self.path_length += math.hypot(self.user_pos[0]-self.last_sample[0], self.user_pos[1]-self.last_sample[1])
                 self.last_sample = list(self.user_pos)
                 
@@ -203,12 +226,14 @@ class RehabApp(Node):
                 
                 if "val" in res:
                     m = self.f_big.render(f"{res['name']}: {res['val']:.2f}", True, COLORS["text"])
+                    t_info = self.f_med.render(f"Avg Tremor: {res['avg_tremor']:.2f}", True, COLORS["warning"])
                     s = self.f_med.render(res["sugg"], True, COLORS["accent"])
-                    self.screen.blit(m, m.get_rect(center=(self.center_x, 350)))
-                    self.screen.blit(s, s.get_rect(center=(self.center_x, 480)))
+                    self.screen.blit(m, m.get_rect(center=(self.center_x, 330)))
+                    self.screen.blit(t_info, t_info.get_rect(center=(self.center_x, 400)))
+                    self.screen.blit(s, s.get_rect(center=(self.center_x, 500)))
                 else:
                     m = self.f_big.render(res["msg"], True, COLORS["text"])
-                    self.screen.blit(m, m.get_rect(center=(self.center_x, 350)))
+                    self.screen.blit(m, m.get_rect(center=(self.center_x, 330)))
 
                 if self.level == 4:
                     hint = self.f_med.render("PRESS TO EXIT", True, (80, 80, 80))
