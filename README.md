@@ -1,5 +1,5 @@
 # :wave: DexTrace
-DexTrace is an integrated hardware-software system designed to train and **rehabilitate fine motor coordination** and **stability**. By combining a **Raspberry Pi Pico** controller with a **Python-based GUI**, the system evaluates user performance across three progressive difficulty levels, monitoring spatial precision and tremor intensity in **real-time**.
+DexTrace is an integrated hardware-software system designed to train and **rehabilitate hand fine motor coordination** and **dexterity**. By combining a **Raspberry Pi Pico** controller with a **Python-based GUI**, the system evaluates user performance across three progressive difficulty levels, monitoring spatial precision and tremor intensity in **real-time**.
 
 ## :dart: Key Features
 * **Real-Time Architecture**: Bidirectional communication based on ROS2 (micro-ROS) between the microcontroller and PC;
