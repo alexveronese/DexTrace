@@ -57,7 +57,7 @@ echo "export PICO_SDK_PATH=$HOME/pico-sdk" >> ~/.bashrc
 source ~/.bashrc
 ```
 
-### 2. build micro-ROS agent (first time only)
+### 2. Build micro-ROS agent (first time only)
 micro-ROS follows the client-server architecture, so you need to start the micro-ROS Agent.
 
 ```bash
