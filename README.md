@@ -2,13 +2,13 @@
 DexTrace is an integrated hardware-software system designed to train and **rehabilitate fine motor coordination** and **stability**. By combining a **Raspberry Pi Pico** controller with a **Python-based GUI**, the system evaluates user performance across three progressive difficulty levels, monitoring spatial precision and tremor intensity in **real-time**.
 
 ## :dart: Key Features
-* **Real-Time Architecture**: Bidirectional communication based on ROS 2 (micro-ROS) between the microcontroller and PC;
+* **Real-Time Architecture**: Bidirectional communication based on ROS2 (micro-ROS) between the microcontroller and PC;
 * **Tremor Analysis**: Integrated MPU6050 IMU for calculating real-time tremor variance and intensity;
-* **Multimodal Feedback**: Hardware-managed acoustic alarms (Buzzer) and visual feedback (Shake & Color) on screen;
+* **Multimodal Feedback**: Hardware-managed acoustic alarms and visual feedback on screen;
 * **Clinical Evaluation Protocol**:
-    * *Level 1 (Reaching)*: Path efficiency and target acquisition assessment;
-    * *Level 2 (Tracking)*: Smooth circular target following;
-    * *Level 3 (Chasing)*: Non-linear dynamics to simulate complex surgical scenarios.
+    * Level 1 (*Reaching*): Path efficiency and target acquisition assessment;
+    * Level 2 (*Tracking*): Smooth circular target following;
+    * Level 3 (*Chasing*): Non-linear dynamics to simulate complex scenarios.
 
 ## :clipboard: System Requirements
 **Hardware**:
@@ -19,10 +19,13 @@ DexTrace is an integrated hardware-software system designed to train and **rehab
 * Led (with 220 Ω resistor).
 
 **Software**:  
-* ROS 2 (Humble or later - check compatibility with your Ubuntu version);
+* ROS2 (Humble or later - check compatibility with your Ubuntu version);
 * Micro-ROS Agent;
 * Python 3.10+;
 * Python Libraries: ```pygame```, ```rclpy```, ```math```, ```geometry_msgs```, ```std_msgs```.
+
+## :hammer_and_wrench: Prototype
+![Example of prototype](assets/images/prototype.jpeg)
 
 ## 🔧 Installation & Setup
 ### micro-ROS workspace with FreeRTOS for Raspberry PI Pico SDK
@@ -83,7 +86,7 @@ ros2 run micro_ros_setup build_agent.sh
 
 ### 3. Clone this repository
 
-Recursively clone the repo (working for ROS2 `humble`).
+Recursively clone the repo (working for Ubuntu `v22.04` with ROS2 `humble`).
 ```bash
 git clone --recursive https://github.com/alexveronese/DexTrace
 ```
