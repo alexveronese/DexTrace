@@ -6,6 +6,7 @@ import pygame
 import time
 import math
 import random
+import sys
 
 # --- Graphics and Levels ---
 COLORS = {
@@ -59,8 +60,7 @@ class RehabApp(Node):
         if self.pico_active and not self.last_pico_active:
             if (now - self.last_transition_time) > self.debounce_delay:
                 if self.level == 4: 
-                    pygame.quit()
-                    exit()
+                    self.safe_exit()
                 elif self.state in ["WAITING", "RESULTS"]: self.load_level()
                 elif self.state == "LOADED": self.start_exercise()
                 self.last_transition_time = now
@@ -144,6 +144,12 @@ class RehabApp(Node):
             "color": COLORS["success"] if success else COLORS["danger"]
         }
 
+    def safe_exit(self):
+        self.pub_alert.publish(Bool(data=False))
+        time.sleep(0.1) 
+        pygame.quit()
+        sys.exit()
+
     def draw_ui_elements(self, elapsed, dist, l_cfg):
         # Sfondo e Target
         self.screen.fill(COLORS["bg"])
@@ -177,10 +183,8 @@ class RehabApp(Node):
         clock = pygame.time.Clock()
         while rclpy.ok():
             for event in pygame.event.get():
-                if event.type == pygame.QUIT or event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE: 
-                    self.pub_alert.publish(Bool(data=False))
-                    pygame.quit()
-                    exit()
+                if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE): 
+                    self.safe_exit()
 
             if self.state == "WAITING":
                 self.screen.fill(COLORS["bg"])
