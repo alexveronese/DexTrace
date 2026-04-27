@@ -29,8 +29,8 @@ LEVELS = {
 class RehabApp(Node):
     def __init__(self):
         super().__init__('rehab_app')
-        self.sub = self.create_subscription(Twist, '/surgeon_input', self.pos_callback, 10)
-        self.pub_alert = self.create_publisher(Bool, '/collision_alert', 10)
+        self.sub = self.create_subscription(Twist, '/controller_input', self.pos_callback, 10)
+        self.pub_alert = self.create_publisher(Bool, '/alarm_alert', 10)
         self.pub_config = self.create_publisher(Twist, '/rehab_config', 10)
         
         pygame.init()

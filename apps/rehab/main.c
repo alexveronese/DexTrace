@@ -25,29 +25,26 @@
 #include "debug_uart.h"
 #include <math.h>
 
-// Configurazione Pin
+// PINS CONFIG
 #define I2C_PORT i2c0
 
 const uint PIN_LED_TREMOR = 16;
 const uint PIN_SDA = 4;
 const uint PIN_SCL = 5;
-const uint LED_PIN = 25; // LED integrato del Pico
+const uint LED_PIN = 25;
 const uint PIN_JOY_X = 26;
 const uint PIN_JOY_Y = 27;
 const uint PIN_BTN_START = 21;
 const uint PIN_BUZZER = 15;
 
 
-// --- STRUTTURE DATI ---
+// DATA STRUCTURES
 
-// Dynamic configuration received from PC
 typedef struct {
     float gain;
     float tremor_threshold;
 } DeviceConfig_t;
 
-// Pacchetto per la CODA (Trasporto dati verso ROS)
-// Garantisce la coerenza temporale: ogni pacchetto è un'istantanea atomica.
 typedef struct {
     float x;
     float y;
@@ -55,17 +52,15 @@ typedef struct {
     bool active; 
 } SensorPacket_t;
 
-// Stato Globale del Sistema (Condiviso via Mutex)
-// Serve per il controllo degli attuatori (LED, Buzzer) in tempo reale.
 struct SystemState {
     bool active;
     float current_tremor_intensity;
     DeviceConfig_t config;
 };
 
-// --- RISORSE DI CONCORRENZA ---
+// GLOBAL RESOURCES
 struct SystemState global_state = {false, 0.0f, {1.0f, 0.7f}};
-bool collision_alarm = false;
+bool target_alarm = false;
 uint32_t last_ros_message_time = 0;
 const uint32_t ROS_WATCHDOG_TIMEOUT = 1000;
 
@@ -78,7 +73,6 @@ TaskHandle_t xHandleTremor = NULL;
 TaskHandle_t xHandleInput = NULL;
 TaskHandle_t xHandleBuzzer = NULL;
 
-// Variabili globali per micro-ROS
 rcl_publisher_t publisher;
 rcl_subscription_t subscriber_alarm;
 rcl_subscription_t subscriber_config;
@@ -91,9 +85,8 @@ rclc_support_t support;
 rcl_allocator_t allocator;
 rcl_node_t node;
 
-// --- INIZIALIZZAZIONE MPU6050 ---
 void mpu6050_reset() {
-    uint8_t buf[] = {0x6B, 0x00}; // Sveglia il sensore
+    uint8_t buf[] = {0x6B, 0x00};
     i2c_write_blocking(I2C_PORT, 0x68, buf, 2, false);
 }
 
@@ -108,14 +101,12 @@ void mpu6050_read_raw(int16_t accel[3]) {
     }
 }
 
-// Callback: viene eseguita ogni volta che il PC invia un messaggio su /collision_alert
 void subscription_callback(const void * msin) {
     const std_msgs__msg__Bool * msg = (const std_msgs__msg__Bool *)msin;
-    collision_alarm = msg->data;
-    last_ros_message_time = to_ms_since_boot(get_absolute_time()); // Registra quando è arrivato
+    target_alarm = msg->data;
+    last_ros_message_time = to_ms_since_boot(get_absolute_time());
 }
 
-// Update local parameters when PC changes level
 void config_callback(const void * msin) {
     const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msin;
     xSemaphoreTake(xMutex, portMAX_DELAY);
@@ -126,14 +117,13 @@ void config_callback(const void * msin) {
     last_ros_message_time = to_ms_since_boot(get_absolute_time());
 }
 
-// --- TASK 1: GESTIONE INPUT (Alta Priorità) ---
+// --- TASK 1: INPUT (High priority) ---
 void Task_Input(void *pvParameters) {
     bool last_btn_state = true;
     const float DEADZONE = 0.05f;
     SensorPacket_t packet;
 
     for (;;) {
-        // Lettura Joystick
         adc_select_input(0);
         float raw_x = ((float)adc_read() - 2048.0f) / 2048.0f;
         adc_select_input(1);
@@ -142,7 +132,7 @@ void Task_Input(void *pvParameters) {
         if (fabs(raw_x) < DEADZONE) raw_x = 0.0f;
         if (fabs(raw_y) < DEADZONE) raw_y = 0.0f;
 
-        // Gestione Pulsante con Debounce
+        // Button de-bounce
         bool current_btn_state = gpio_get(PIN_BTN_START);
 
         if (last_btn_state && !current_btn_state) {
@@ -152,7 +142,7 @@ void Task_Input(void *pvParameters) {
                 global_state.active = !global_state.active;
                 
                 if (!global_state.active) {
-                    collision_alarm = false; 
+                    target_alarm = false; 
                 }
                 xSemaphoreGive(xMutex);
             }
@@ -167,22 +157,21 @@ void Task_Input(void *pvParameters) {
         packet.active = global_state.active;
         xSemaphoreGive(xMutex);
 
-        // Invio alla Coda (Sovrascrittura = vogliamo solo l'ultimo dato fresco)
         xQueueOverwrite(xSensorQueue, &packet);
 
-        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
-// --- TASK 2: MICRO-ROS (Media Priorità) ---
+// --- TASK 2: MICRO-ROS (Medium priority) ---
 void Task_ROS(void *pvParameters) {
     rmw_uros_set_custom_transport(true, NULL, pico_serial_transport_open, pico_serial_transport_close, pico_serial_transport_write, pico_serial_transport_read);
     allocator = rcl_get_default_allocator();
     rclc_support_init(&support, 0, NULL, &allocator);
     rclc_node_init_default(&node, "pico_rehab_node", "", &support);
 
-    rclc_publisher_init_default(&publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "/surgeon_input");
-    rclc_subscription_init_default(&subscriber_alarm, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool), "/collision_alert");
+    rclc_publisher_init_default(&publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "/controller_input");
+    rclc_subscription_init_default(&subscriber_alarm, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool), "/alarm_alert");
     rclc_subscription_init_default(&subscriber_config, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "/rehab_config");
 
     rclc_executor_init(&executor, &support.context, 2, &allocator);
@@ -195,17 +184,16 @@ void Task_ROS(void *pvParameters) {
     for (;;) {
         uint32_t now = to_ms_since_boot(get_absolute_time());
 
-        // Watchdog di Connessione
+        // CONNECTION WATCHDOG
         if (now - last_ros_message_time > ROS_WATCHDOG_TIMEOUT) {
             xSemaphoreTake(xMutex, portMAX_DELAY);
             if (global_state.active) {
                 global_state.active = false;
-                collision_alarm = false;
+                target_alarm = false;
             }
             xSemaphoreGive(xMutex);
         }
 
-        // Consumiamo il pacchetto dalla coda
         if (xQueueReceive(xSensorQueue, &data_from_queue, 0) == pdPASS) {
             msg_pub.linear.x = data_from_queue.x;
             msg_pub.linear.y = data_from_queue.y;
@@ -220,11 +208,11 @@ void Task_ROS(void *pvParameters) {
     }
 }
 
-// --- TASK 3: FEEDBACK ACUSTICO (Priorità Massima) ---
+// --- TASK 3: BUZZER (High Priority) ---
 void Task_Buzzer(void *pvParameters) {
     for (;;) {
         xSemaphoreTake(xMutex, portMAX_DELAY);
-        bool run = global_state.active && collision_alarm;
+        bool run = global_state.active && target_alarm;
         xSemaphoreGive(xMutex);
 
         if (run) {
@@ -236,7 +224,7 @@ void Task_Buzzer(void *pvParameters) {
     }
 }
 
-// --- TASK 4: ANALISI DEL TREMORE (Alta Priorità) ---
+// --- TASK 4: TREMOR (High priority) ---
 void Task_Tremor(void *pvParameters) {
     int16_t accel[3];
     float samples[20] = {0};
@@ -268,7 +256,7 @@ void Task_Tremor(void *pvParameters) {
     }
 }
 
-// --- TASK 5: HEARTBEAT LED (Priorità Minima) ---
+// --- TASK 5: HEARTBEAT LED (Low priority) ---
 void Task_Heartbeat(void *pvParameters) {
     for (;;) {
         xSemaphoreTake(xMutex, portMAX_DELAY);
