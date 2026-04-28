@@ -189,7 +189,9 @@ class RehabApp(Node):
             if self.state == "WAITING":
                 self.screen.fill(COLORS["bg"])
                 t = self.f_big.render("DEXTRACE SYSTEM READY", True, COLORS["text"])
-                self.screen.blit(t, t.get_rect(center=(self.center_x, self.center_y)))
+                s = self.f_med.render("PRESS THE BUTTON TO LOAD THE TRAINING", True, COLORS["text"])
+                self.screen.blit(t, t.get_rect(center=(self.center_x, self.center_y-40)))
+                self.screen.blit(s, s.get_rect(center=(self.center_x, self.center_y+40)))
 
             elif self.state == "LOADED":
                 self.screen.fill(COLORS["panel"])
