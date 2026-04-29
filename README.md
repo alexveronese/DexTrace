@@ -1,6 +1,8 @@
 # :wave: DexTrace
 DexTrace is an integrated hardware-software system designed to train and **rehabilitate hand fine motor coordination** and **dexterity**. By combining a **Raspberry Pi Pico** controller with a **Python-based GUI**, the system evaluates user performance across three progressive difficulty levels, monitoring spatial precision and tremor intensity in **real-time**.
 
+See the [project presentation](assets/slides/DexTrace_ProjectPresentation.pdf) for further details.
+
 ## :dart: Key Features
 * **Real-Time Architecture**: Bidirectional communication based on ROS2 (micro-ROS) between the microcontroller and PC;
 * **Tremor Analysis**: Integrated MPU6050 IMU for calculating real-time tremor variance and intensity;
@@ -141,10 +143,15 @@ The system calculates the quality of motor gestures using weighted algorithms:
 
 ## 🏗️ System Architecture
 The project utilizes a **Finite State Machine** (FSM) to ensure safety and smooth operation:
-* *WAITING*: System idle, sensor calibration active;
+* *WAITING*: System idle;
 * *LOADED*: Gain and threshold parameters sent from PC to Pico + Alarm reset;
-* *ACTIVE*: 100Hz data streaming and watchdog monitoring;
+* *ACTIVE*: Data streaming and watchdog monitoring;
 * *RESULTS*: Statistical processing of the session and score calculation.
+
+<br/>
+
+![FSM](assets/images/fsm.png)
+
 
 ## License
 This repository is open-sourced under the Apache-2.0 license. See the [LICENSE](LICENSE) file for details. The content of this repository is derived from [micro_ros_raspberrypi_pico_sdk](https://github.com/micro-ROS/micro_ros_raspberrypi_pico_sdk.git) and [RTES_freertos_PICO](https://github.com/cscribano/RTES_freertos_PICO/tree/humble).
