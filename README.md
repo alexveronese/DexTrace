@@ -93,11 +93,21 @@ Recursively clone the repo (working for Ubuntu `v22.04` with ROS2 `humble`).
 git clone --recursive https://github.com/alexveronese/DexTrace
 ```
 
-### 4. PC configuration
-Install the required Python dependencies:
-
+### 4. Package configuration
+Move the `dextrace_rehab` ROS2 package to the workspace.
 ```bash
-pip install pygame
+cd ..
+mv DexTrace/dextrace_rehab src/dextrace_rehab
+
+# Moving to the workspace
+cd microros_ws
+
+# Build the package
+colcon build --packages-select dextrace_rehab
+
+# Source the setup and run:
+source install/setup.bash
+ros2 run dextrace_rehab rehab_app
 ```
 
 ## :gear: Running
