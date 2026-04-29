@@ -107,7 +107,6 @@ colcon build --packages-select dextrace_rehab
 
 # Source the setup and run:
 source install/setup.bash
-ros2 run dextrace_rehab rehab_app
 ```
 
 ## :gear: Running
@@ -128,8 +127,9 @@ cp rehab.uf2 $(findmnt -rn -o TARGET -S LABEL=RPI-RP2)/
 ```
 
 ### Run micro-ROS agent
+Open a new terminal.
 ```bash
-# Rource workspace
+# Source workspace
 cd microros_ws
 source install/local_setup.bash
 
@@ -137,10 +137,13 @@ source install/local_setup.bash
 ros2 run micro_ros_agent micro_ros_agent serial --dev /dev/ttyACM0
 ```
 ### Launch DexTrace
-In a new terminal, run the graphical interface:
-
+Open a new terminal and run the rehapp node.
 ```bash
-python3 rehab_gui.py
+# Source workspace
+cd microros_ws
+source install/local_setup.bash
+
+ros2 run dextrace_rehab rehab_app
 ```
 ## 📊 Evaluation Metrics (Dex-Metrics)
 The system calculates the quality of motor gestures using weighted algorithms:
