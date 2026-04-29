@@ -252,7 +252,16 @@ class RehabApp(Node):
             clock.tick(60)
             rclpy.spin_once(self, timeout_sec=0.001)
 
+def main(args=None):
+    rclpy.init(args=args)
+    node = RehabApp()
+    try:
+        node.run()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.safe_exit()
+        rclpy.shutdown()
+
 if __name__ == '__main__':
-    rclpy.init()
-    RehabApp().run()
-    rclpy.shutdown()
+    main()
