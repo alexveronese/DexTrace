@@ -26,8 +26,42 @@ See the [project presentation](assets/slides/DexTrace_ProjectPresentation.pdf) f
 * Python 3.10+;
 * Python Libraries: ```pygame```, ```rclpy```, ```math```, ```geometry_msgs```, ```std_msgs```.
 
+## 🏗️ System Architecture
+The project utilizes a **Finite State Machine** (FSM) to ensure safety and smooth operation:
+* *WAITING*: System idle;
+* *LOADED*: Gain and threshold parameters sent from PC to Pico + Alarm reset;
+* *ACTIVE*: Data streaming and watchdog monitoring;
+* *RESULTS*: Statistical processing of the session and score calculation.
+
+<br/>
+
+![FSM](assets/images/fsm.png)
+
+## 📊 Evaluation Metrics (Dex-Metrics)
+The system calculates the quality of motor gestures using weighted algorithms:
+
+|   Metric  |   Description  | Formula | Level |
+| --------  | -------------- | ------- | ----- |
+| Tremor Intensity | Calculated based on the variance of 3-axis acceleration from the MPU6050 | $Var(Mag_{accel})$ | All |
+| Dex-Efficiency | Ratio between real and optimal path + tremor penalty | $Path_{eff} + (Tremor_{avg} \cdot 0.5)$| 1 |
+| Dex-Accuracy | RMSE weighted by tremor intensity | $RMSE + (Tremor_{avg} \cdot 10)$ | 2 & 3 |
+
+
 ## :hammer_and_wrench: Prototype
 ![Example of prototype](assets/images/prototype.jpeg)
+
+### Wiring table
+|   Pico pin  |   Components pin  |
+| --------  | -------------- |
+| 38 | Joystick GND, IMU GND |
+| 36 | Joystick VCC, IMU VCC |
+| 31 - GP26 | Joystick VRx |
+| 32 - GP27 | Joystick VRy |
+| 27 - GP21 | Joystick SW |
+| 7 - GP5 | IMU SCL |
+| 6 - GP4 | IMU SDA |
+| 20 - GP15 | Buzzer |
+| 21 - GP16 | Led |
 
 ## 🔧 Installation & Setup
 ### micro-ROS workspace with FreeRTOS for Raspberry PI Pico SDK
@@ -145,26 +179,6 @@ source install/local_setup.bash
 
 ros2 run dextrace_rehab rehab_app
 ```
-## 📊 Evaluation Metrics (Dex-Metrics)
-The system calculates the quality of motor gestures using weighted algorithms:
-
-|   Metric  |   Description  | Formula |
-| --------  | -------------- | ------- |
-| Tremor Intensity | Calculated based on the variance of 3-axis acceleration from the MPU6050. | $Var(Mag_{accel})$ |
-| Dex-Efficiency | Used in Level 1. Ratio between real and optimal path + tremor penalty. | $Path_{eff} + (Tremor_{avg} \cdot 0.5)$|
-| Dex-Accuracy | Used in Levels 2/3. RMSE weighted by tremor intensity. | $RMSE + (Tremor_{avg} \cdot 10)$ |
-
-## 🏗️ System Architecture
-The project utilizes a **Finite State Machine** (FSM) to ensure safety and smooth operation:
-* *WAITING*: System idle;
-* *LOADED*: Gain and threshold parameters sent from PC to Pico + Alarm reset;
-* *ACTIVE*: Data streaming and watchdog monitoring;
-* *RESULTS*: Statistical processing of the session and score calculation.
-
-<br/>
-
-![FSM](assets/images/fsm.png)
-
 
 ## License
 This repository is open-sourced under the Apache-2.0 license. See the [LICENSE](LICENSE) file for details. The content of this repository is derived from [micro_ros_raspberrypi_pico_sdk](https://github.com/micro-ROS/micro_ros_raspberrypi_pico_sdk.git) and [RTES_freertos_PICO](https://github.com/cscribano/RTES_freertos_PICO/tree/humble).
