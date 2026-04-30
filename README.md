@@ -94,8 +94,7 @@ git clone --recursive https://github.com/alexveronese/DexTrace
 ```
 
 ### 4. Package configuration
-Move the `dextrace_rehab` ROS2 package to the workspace.
-First 
+Move the `dextrace_rehab` ROS2 package to the workspace. 
 ```bash
 cd <your_project_dir>
 mv DexTrace/dextrace_rehab microros_ws/src/dextrace_rehab
