@@ -63,6 +63,7 @@ struct SystemState global_state = {false, 0.0f, {1.0f, 0.7f}};
 bool target_alarm = false;
 uint32_t last_ros_message_time = 0;
 const uint32_t ROS_WATCHDOG_TIMEOUT = 1000;
+const float DEADZONE = 0.05f;
 
 SemaphoreHandle_t xMutex;
 QueueHandle_t xSensorQueue;
@@ -120,7 +121,6 @@ void config_callback(const void * msin) {
 // --- TASK 1: INPUT (High priority) ---
 void Task_Input(void *pvParameters) {
     bool last_btn_state = true;
-    const float DEADZONE = 0.05f;
     SensorPacket_t packet;
 
     for (;;) {
@@ -219,7 +219,7 @@ void Task_Buzzer(void *pvParameters) {
             gpio_put(PIN_BUZZER, 1); vTaskDelay(pdMS_TO_TICKS(80));
             gpio_put(PIN_BUZZER, 0); vTaskDelay(pdMS_TO_TICKS(80));
         } else {
-            gpio_put(PIN_BUZZER, 0); vTaskDelay(pdMS_TO_TICKS(100));
+            gpio_put(PIN_BUZZER, 0); vTaskDelay(pdMS_TO_TICKS(50));
         }
     }
 }
