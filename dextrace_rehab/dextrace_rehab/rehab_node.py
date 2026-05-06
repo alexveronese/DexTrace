@@ -23,7 +23,7 @@ COLORS = {
 LEVELS = {
     1: {"name": "REACHING", "gain": 1.2, "err_max": 55.0, "eval_thresh": 2.5,  "speed": 0.0,   "t_thresh": 0.7},
     2: {"name": "TRACKING", "gain": 2.4, "err_max": 45.0, "eval_thresh": 35.0, "speed": 0.008, "t_thresh": 0.5},
-    3: {"name": "CHASING",  "gain": 3.0, "err_max": 40.0, "eval_thresh": 50.0, "speed": 0.015, "t_thresh": 0.3}
+    3: {"name": "CHASING",  "gain": 3.0, "err_max": 40.0, "eval_thresh": 55.0, "speed": 0.015, "t_thresh": 0.3}
 }
 
 class RehabApp(Node):
@@ -48,7 +48,7 @@ class RehabApp(Node):
         self.user_pos = [float(self.center_x), float(self.center_y)]
         
         self.last_transition_time = 0.0
-        self.debounce_delay = 0.6
+        self.debounce_delay = 0.2
         self.pico_active = False
         self.last_pico_active = False
 

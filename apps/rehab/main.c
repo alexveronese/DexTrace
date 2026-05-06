@@ -6,6 +6,7 @@
 #include "FreeRTOSConfig.h"
 #include "task.h"
 #include "queue.h"
+#include "semphr.h"
 
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
@@ -39,7 +40,6 @@ const uint PIN_BUZZER = 15;
 
 
 // DATA STRUCTURES
-
 typedef struct {
     float gain;
     float tremor_threshold;
@@ -54,16 +54,17 @@ typedef struct {
 
 struct SystemState {
     bool active;
+    bool target_alarm;
     float current_tremor_intensity;
     DeviceConfig_t config;
 };
 
 // GLOBAL RESOURCES
-struct SystemState global_state = {false, 0.0f, {1.0f, 0.7f}};
-bool target_alarm = false;
+struct SystemState global_state = {false, false, 0.0f, {1.0f, 0.7f}};
+
 uint32_t last_ros_message_time = 0;
-const uint32_t ROS_WATCHDOG_TIMEOUT = 1000;
-const float DEADZONE = 0.05f;
+const uint32_t ROS_WATCHDOG_TIMEOUT = 500;
+const float DEADZONE = 0.07f;
 
 SemaphoreHandle_t xMutex;
 QueueHandle_t xSensorQueue;
@@ -86,7 +87,7 @@ rclc_support_t support;
 rcl_allocator_t allocator;
 rcl_node_t node;
 
-void mpu6050_reset() {
+void mpu6050_init() {
     uint8_t buf[] = {0x6B, 0x00};
     i2c_write_blocking(I2C_PORT, 0x68, buf, 2, false);
 }
@@ -104,12 +105,21 @@ void mpu6050_read_raw(int16_t accel[3]) {
 
 void subscription_callback(const void * msin) {
     const std_msgs__msg__Bool * msg = (const std_msgs__msg__Bool *)msin;
-    target_alarm = msg->data;
+    
+    xSemaphoreTake(xMutex, portMAX_DELAY);
+    global_state.target_alarm = msg->data;
+    xSemaphoreGive(xMutex);
+
+    if (msg->data && xHandleBuzzer != NULL) {
+        xTaskNotifyGive(xHandleBuzzer);
+    }
+    
     last_ros_message_time = to_ms_since_boot(get_absolute_time());
 }
 
 void config_callback(const void * msin) {
     const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msin;
+    
     xSemaphoreTake(xMutex, portMAX_DELAY);
     global_state.config.gain = msg->linear.x;
     global_state.config.tremor_threshold = msg->linear.y;
@@ -118,113 +128,28 @@ void config_callback(const void * msin) {
     last_ros_message_time = to_ms_since_boot(get_absolute_time());
 }
 
-// --- TASK 1: INPUT (High priority) ---
-void Task_Input(void *pvParameters) {
-    bool last_btn_state = true;
-    SensorPacket_t packet;
-
-    for (;;) {
-        adc_select_input(0);
-        float raw_x = ((float)adc_read() - 2048.0f) / 2048.0f;
-        adc_select_input(1);
-        float raw_y = ((float)adc_read() - 2048.0f) / 2048.0f;
-
-        if (fabs(raw_x) < DEADZONE) raw_x = 0.0f;
-        if (fabs(raw_y) < DEADZONE) raw_y = 0.0f;
-
-        // Button de-bounce
-        bool current_btn_state = gpio_get(PIN_BTN_START);
-
-        if (last_btn_state && !current_btn_state) {
-            vTaskDelay(pdMS_TO_TICKS(50));
-            if (!gpio_get(PIN_BTN_START)) {
-                xSemaphoreTake(xMutex, portMAX_DELAY);
-                global_state.active = !global_state.active;
-                
-                if (!global_state.active) {
-                    target_alarm = false; 
-                }
-                xSemaphoreGive(xMutex);
-            }
-        }
-        last_btn_state = current_btn_state;
-
-        // Data Encapsulation
-        xSemaphoreTake(xMutex, portMAX_DELAY);
-        packet.x = raw_x * global_state.config.gain; // Dynamic scaling applied here
-        packet.y = raw_y * global_state.config.gain;
-        packet.tremor = global_state.current_tremor_intensity;
-        packet.active = global_state.active;
-        xSemaphoreGive(xMutex);
-
-        xQueueOverwrite(xSensorQueue, &packet);
-
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-}
-
-// --- TASK 2: MICRO-ROS (Medium priority) ---
-void Task_ROS(void *pvParameters) {
-    rmw_uros_set_custom_transport(true, NULL, pico_serial_transport_open, pico_serial_transport_close, pico_serial_transport_write, pico_serial_transport_read);
-    allocator = rcl_get_default_allocator();
-    rclc_support_init(&support, 0, NULL, &allocator);
-    rclc_node_init_default(&node, "pico_rehab_node", "", &support);
-
-    rclc_publisher_init_default(&publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "/controller_input");
-    rclc_subscription_init_default(&subscriber_alarm, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool), "/alarm_alert");
-    rclc_subscription_init_default(&subscriber_config, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "/rehab_config");
-
-    rclc_executor_init(&executor, &support.context, 2, &allocator);
-    rclc_executor_add_subscription(&executor, &subscriber_alarm, &msg_sub, &subscription_callback, ON_NEW_DATA);
-    rclc_executor_add_subscription(&executor, &subscriber_config, &msg_sub_config, &config_callback, ON_NEW_DATA);
-
-    SensorPacket_t data_from_queue;
-    last_ros_message_time = to_ms_since_boot(get_absolute_time());
-
-    for (;;) {
-        uint32_t now = to_ms_since_boot(get_absolute_time());
-
-        // CONNECTION WATCHDOG
-        if (now - last_ros_message_time > ROS_WATCHDOG_TIMEOUT) {
-            xSemaphoreTake(xMutex, portMAX_DELAY);
-            if (global_state.active) {
-                global_state.active = false;
-                target_alarm = false;
-            }
-            xSemaphoreGive(xMutex);
-        }
-
-        if (xQueueReceive(xSensorQueue, &data_from_queue, 0) == pdPASS) {
-            msg_pub.linear.x = data_from_queue.x;
-            msg_pub.linear.y = data_from_queue.y;
-            msg_pub.angular.x = data_from_queue.tremor;
-            msg_pub.angular.z = data_from_queue.active ? 1.0f : 0.0f;
-            
-            rcl_publish(&publisher, &msg_pub, NULL);
-        }
-
-        rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
-        vTaskDelay(pdMS_TO_TICKS(30)); 
-    }
-}
-
-// --- TASK 3: BUZZER (High Priority) ---
+// --- TASK 1: BUZZER (High Priority) ---
 void Task_Buzzer(void *pvParameters) {
     for (;;) {
-        xSemaphoreTake(xMutex, portMAX_DELAY);
-        bool run = global_state.active && target_alarm;
-        xSemaphoreGive(xMutex);
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-        if (run) {
-            gpio_put(PIN_BUZZER, 1); vTaskDelay(pdMS_TO_TICKS(80));
-            gpio_put(PIN_BUZZER, 0); vTaskDelay(pdMS_TO_TICKS(80));
-        } else {
-            gpio_put(PIN_BUZZER, 0); vTaskDelay(pdMS_TO_TICKS(50));
+        bool keep_buzzing = true;
+        while (keep_buzzing) {
+            xSemaphoreTake(xMutex, portMAX_DELAY);
+            keep_buzzing = global_state.active && global_state.target_alarm;
+            xSemaphoreGive(xMutex);
+
+            if (keep_buzzing) {
+                gpio_put(PIN_BUZZER, 1); vTaskDelay(pdMS_TO_TICKS(80));
+                gpio_put(PIN_BUZZER, 0); vTaskDelay(pdMS_TO_TICKS(80));
+            }
         }
+        
+        gpio_put(PIN_BUZZER, 0);
     }
 }
 
-// --- TASK 4: TREMOR (High priority) ---
+// --- TASK 2: TREMOR (High priority) ---
 void Task_Tremor(void *pvParameters) {
     int16_t accel[3];
     float samples[20] = {0};
@@ -256,7 +181,97 @@ void Task_Tremor(void *pvParameters) {
     }
 }
 
-// --- TASK 5: HEARTBEAT LED (Low priority) ---
+// --- TASK 3: INPUT (Medium priority) ---
+void Task_Input(void *pvParameters) {
+    bool last_btn_state = true;
+    SensorPacket_t packet;
+
+    for (;;) {
+        adc_select_input(0);
+        float raw_x = ((float)adc_read() - 2048.0f) / 2048.0f;
+        adc_select_input(1);
+        float raw_y = ((float)adc_read() - 2048.0f) / 2048.0f;
+
+        if (fabs(raw_x) < DEADZONE) raw_x = 0.0f;
+        if (fabs(raw_y) < DEADZONE) raw_y = 0.0f;
+
+        // Button de-bounce
+        bool current_btn_state = gpio_get(PIN_BTN_START);
+
+        if (last_btn_state && !current_btn_state) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            if (!gpio_get(PIN_BTN_START)) {
+                xSemaphoreTake(xMutex, portMAX_DELAY);
+                global_state.active = !global_state.active;
+                
+                if (!global_state.active) {
+                    global_state.target_alarm = false; 
+                }
+                xSemaphoreGive(xMutex);
+            }
+        }
+        last_btn_state = current_btn_state;
+
+        // Data Encapsulation
+        xSemaphoreTake(xMutex, portMAX_DELAY);
+        packet.x = raw_x * global_state.config.gain; // Dynamic scaling applied here
+        packet.y = raw_y * global_state.config.gain;
+        packet.tremor = global_state.current_tremor_intensity;
+        packet.active = global_state.active;
+        xSemaphoreGive(xMutex);
+
+        xQueueOverwrite(xSensorQueue, &packet);
+
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+// --- TASK 4: MICRO-ROS (Low priority) ---
+void Task_ROS(void *pvParameters) {
+    rmw_uros_set_custom_transport(true, NULL, pico_serial_transport_open, pico_serial_transport_close, pico_serial_transport_write, pico_serial_transport_read);
+    allocator = rcl_get_default_allocator();
+    rclc_support_init(&support, 0, NULL, &allocator);
+    rclc_node_init_default(&node, "pico_rehab_node", "", &support);
+
+    rclc_publisher_init_default(&publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "/controller_input");
+    rclc_subscription_init_default(&subscriber_alarm, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool), "/alarm_alert");
+    rclc_subscription_init_default(&subscriber_config, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "/rehab_config");
+
+    rclc_executor_init(&executor, &support.context, 2, &allocator);
+    rclc_executor_add_subscription(&executor, &subscriber_alarm, &msg_sub, &subscription_callback, ON_NEW_DATA);
+    rclc_executor_add_subscription(&executor, &subscriber_config, &msg_sub_config, &config_callback, ON_NEW_DATA);
+
+    SensorPacket_t data_from_queue;
+    last_ros_message_time = to_ms_since_boot(get_absolute_time());
+
+    for (;;) {
+        uint32_t now = to_ms_since_boot(get_absolute_time());
+
+        // Connection watchdog
+        if (now - last_ros_message_time > ROS_WATCHDOG_TIMEOUT) {
+            xSemaphoreTake(xMutex, portMAX_DELAY);
+            if (global_state.active) {
+                global_state.active = false;
+                global_state.target_alarm = false;
+            }
+            xSemaphoreGive(xMutex);
+        }
+
+        if (xQueueReceive(xSensorQueue, &data_from_queue, 0) == pdPASS) {
+            msg_pub.linear.x = data_from_queue.x;
+            msg_pub.linear.y = data_from_queue.y;
+            msg_pub.angular.x = data_from_queue.tremor;
+            msg_pub.angular.z = data_from_queue.active ? 1.0f : 0.0f;
+            
+            rcl_publish(&publisher, &msg_pub, NULL);
+        }
+
+        rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
+        vTaskDelay(pdMS_TO_TICKS(30)); 
+    }
+}
+
+// --- TASK 5: HEARTBEAT LED (Lowest priority) ---
 void Task_Heartbeat(void *pvParameters) {
     for (;;) {
         xSemaphoreTake(xMutex, portMAX_DELAY);
@@ -288,7 +303,7 @@ int main() {
     gpio_set_function(PIN_SCL, GPIO_FUNC_I2C);
     gpio_pull_up(PIN_SDA);
     gpio_pull_up(PIN_SCL);
-    mpu6050_reset();
+    mpu6050_init();
 
     gpio_init(PIN_LED_TREMOR);
     gpio_set_dir(PIN_LED_TREMOR, GPIO_OUT);
